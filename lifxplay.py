@@ -5,7 +5,7 @@ import socket
 from bitstruct import pack, unpack, byteswap, calcsize
 from binascii import hexlify
 
-# frame header: size|origin|tagged|addressable|protocol|source
+# frame header: size|origin|tagged|addressable|LIFX protocol(1024)|source
 fheader_fmt = 'u16u2u1u1u12u32'
 fheader_bs = '224'
 
@@ -29,7 +29,8 @@ TO_MSGS = {
     'GetWifiFirmware': (18, '', ''), # get Wifi firmware info (StateWifiFirmware)
     'GetPower': (20, '', ''), # gets power level (StatePower)
     'SetPower': (21, 'u16', '2'), # set power level 0-65535
-    'SetLabel': (23, 't256', ['32']), # sets the bulb label
+    'GetLabel': (23, '', ''), # gets a bulbs label (StateLabel)
+    'SetLabel': (24, 't256', ['32']), # sets the bulb label
     'GetVersion': (32, '', ''), # gets HW version (StateVersion)
     'GetInfo': (34, '', ''), # get runtime info (StateInfo)
     'GetLocation': (48, '', ''), # get location info (StateLocation)
@@ -47,7 +48,7 @@ TO_MSGS = {
 
 # protocol: ('Name', 'fmt', 'bswap') # description
 FROM_MSGS = {
-    3: ('StateService', 'u8u32', '14') # service|port
+    3: ('StateService', 'u8u32', '14'), # service|port
     13: ('StateHostInfo', 'u32u32u32u16', '4442'), # signal|tx|rx|reserved
     15: ('StateHostFirmware', 'u64u64u32', '884'), # build|reserved|version
     17: ('StateWifiInfo', 'u32u32u32u16', '4442'), # signal|tx|rx|reserved
@@ -66,6 +67,11 @@ FROM_MSGS = {
     121: ('StateInfrared', 'u16', '2'), # brightness
 }
 
+MSG_IDS = {}
+for id in FROM_MSGS:
+    name = FROM_MSGS[id][0]
+    MSG_IDS[name] = id
+
 # for Multizone packets, NO_APPLY buffers msg, APPLY applies this and buffered changes, APPLY_ONLY applies buffered, but not this message
 APPLY = { 'NO_APPLY': 0, 'APPLY': 1, 'APPLY_ONLY': 2 }
 
@@ -74,7 +80,14 @@ PRODUCT_INFO = {
     1: 'Original 1000',
     3: 'Color 650',
     10: 'White 800 (Low Voltage)',
-    11: 'White 800 (High Voltage)'
+    11: 'White 800 (High Voltage)',
+    18: 'White 900 (Low Voltage)',
+    20: 'Color 1000 BR30',
+    22: 'Color 1000',
+    27: 'LIFX A19',
+    28: 'LIFX BR30',
+    29: 'LIFX+ A19',
+    30: 'LIFX+ BR30',
     31: 'LIFX Z'
 }
 
@@ -105,6 +118,13 @@ def decode_payload(packet, fmt, bswap):
     '''decodes a payload packet using fmt and bswap by calling decode at the payload starting position'''
     return decode(packet, headers_size, fmt, bswap)
     
+def decode_payload_auto(packet):
+    '''automatically decodes a packet using by extracting the protocol from the header'''
+    # protocol header: reserved|type|reserved|(payload)
+    _, protocol, _ = decode_protocol_header(packet)
+    _, fmt, bswap = FROM_MSGS[int(protocol)]
+    return (int(protocol), decode(packet, headers_size, fmt, bswap))
+    
 def make_frame_header(size, tagged):
     '''returns a frame header using the given size and tagged parameters'''
     unswapped_header = pack(fheader_fmt, \
@@ -112,9 +132,9 @@ def make_frame_header(size, tagged):
     return byteswap(fheader_bs, unswapped_header)
 
 fh_start = 0
-def decode_header(packet):
+def decode_frame_header(packet):
     '''decodes the header of a packet using decode starting at the header position'''
-    return decode(packet, 0, fheader_fmt, fheader_bs)
+    return decode(packet, fh_start, fheader_fmt, fheader_bs)
     
 def make_frame_address(target, ack_required, res_required, sequence):
     '''returns a frame address with the given target, ack/res, and sequence values'''
@@ -153,6 +173,7 @@ def get_group(target, seq=0):
     send_packet(packet, (target[1], target[2]))
     
 def get_mata(target, ack):
+    '''returns packed mac, address, target, and ack'''
     if target is None:
         addr = bcast
         mac = 0
@@ -162,6 +183,29 @@ def get_mata(target, ack):
     tagged = 1 if target is None else 0
     ack = 1 if ack is True else 0
     return (mac, addr, tagged, ack)
+    
+def send_msg(msg_name, payload, target=None, ack=False, seq=0):
+    '''sends a message, identified by name, with the given payload (packed tuple)
+    to the target, using the given ack and seq values.
+    Target should be a packed bulb tuple (mac, (ip, port)).
+    '''
+    protocol, fmt, bswap = TO_MSGS[msg_name]
+    packet_size = headers_size + sizeof(fmt)
+    mac, addr, tagged, ack = get_mata(target, ack)
+    
+    frame_header = make_frame_header(packet_size, tagged)
+    frame_addr = make_frame_address(mac, ack, 0, seq)
+    protocol_header = make_protocol_header(protocol)
+    header = frame_header + frame_addr + protocol_header
+    
+    if payload is not None:
+        unswapped_payload = pack(fmt, 0, *payload)
+        swapped = byteswap(bswap, unswapped_payload)    
+        packet = header + swapped
+    else:
+        packet = header
+        
+    send_packet(packet, addr)
     
 def set_color(hue, saturation, brightness, kelvin, duration, 
     target=None, ack=False, seq=0):
