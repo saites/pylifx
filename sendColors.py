@@ -46,10 +46,66 @@ def get_labels(bulbs):
     except socket.timeout:
         pass
        
+       
+       
+def get_color_zones(mac, bulb):
+    ip, port, _, _ = bulb
+    
+    zones = {}
+    zone_count = 0
+    
+    send_msg('GetColorZones', (0, 255), target=(mac, ip, port), verbose=True)
+    
+    try:
+        while True:
+            data, (ipaddr, port) = receive()
+            ret_mac, _, _, _, _, _ = decode_frame_address(data)
+            if ret_mac != mac:
+                continue
 
-bulbs = discover_bulbs(2)
+            protocol, payload = decode_payload_auto(data)
+            if protocol == MSG_IDS['StateMultiZone']:
+                print('multi')
+                zone_count, index = payload[0:2]
+                for i in range(8):
+                    h,s,b,k = payload[i*4+2:i*4+6]
+                    zones[index + i] = (h,s,b,k)
+            if protocol == MSG_IDS['StateZone']:
+                print('single')
+                zone_count, index, h, s, b, k = payload
+                zones[index] = (h,s,b,k)
+                
+    except socket.timeout:
+        pass
+        
+    return (zone_count, zones)
+        
+'''
+bulbs = discover_bulbs(1)
 get_labels(bulbs)
 pprint(bulbs)
+
+cb = [b for b in bulbs if bulbs[b][2] == 'Cabinet Lights'][0]
+cb = [cb].append(bulbs[cb])
+print(cb)
+'''
+
+set_timeout(2)
+zones = get_color_zones(272528909366224, ('192.168.1.233', 56700, 'Cabinet Lights', ''))
+pprint(zones)
+exit()
+
+
+cabinet = (272528909366224, '192.168.1.233', 56700)
+for i in range(80):
+    h = int(65535.0/80.0*i)
+    s = 65535
+    b = 65535
+    k = 3500
+    payload = (i, i, h, s, b, k, 2000, APPLY['NO_APPLY'])
+    send_msg('SetColorZones', payload, target=cabinet, verbose=True)
+    time.sleep(.050)
+send_msg('SetColorZones', (0, 0, 0, 0, 0, 5000, 0, APPLY['APPLY_ONLY']))
 exit()
 
 

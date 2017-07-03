@@ -184,7 +184,7 @@ def get_mata(target, ack):
     ack = 1 if ack is True else 0
     return (mac, addr, tagged, ack)
     
-def send_msg(msg_name, payload, target=None, ack=False, seq=0):
+def send_msg(msg_name, payload, target=None, ack=False, seq=0, verbose=False):
     '''sends a message, identified by name, with the given payload (packed tuple)
     to the target, using the given ack and seq values.
     Target should be a packed bulb tuple (mac, (ip, port)).
@@ -199,12 +199,17 @@ def send_msg(msg_name, payload, target=None, ack=False, seq=0):
     header = frame_header + frame_addr + protocol_header
     
     if payload is not None:
-        unswapped_payload = pack(fmt, 0, *payload)
-        swapped = byteswap(bswap, unswapped_payload)    
+        unswapped_payload = pack(fmt, *payload)
+        swapped = byteswap(bswap, unswapped_payload)
+        if verbose:
+            print(swapped)
         packet = header + swapped
     else:
         packet = header
         
+    if verbose:
+        print(packet)
+    
     send_packet(packet, addr)
     
 def set_color(hue, saturation, brightness, kelvin, duration, 
